@@ -68,3 +68,4 @@ P003,393,1,3,683,down
 - `boarding_time`: 391表示6:31 (6*60+31)
 - `line_id`: 211或683
 - `direction`: up(上行)或down(下行)
+
