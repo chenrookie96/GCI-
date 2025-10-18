@@ -37,9 +37,19 @@ class TrainingMonitor:
         self.departure_differences = []  # 发车次数差异
         self.balance_violations = []     # 平衡约束违反的episode
         
+        # 新增：上下行等待时间记录
+        self.up_waiting_times = []
+        self.down_waiting_times = []
+        self.waiting_time_ratios = []
+        
+        # 新增：最佳模型追踪
+        self.best_episode = 0
+        self.best_avg_waiting = float('inf')
+        
     def log_episode(self, episode: int, reward: float, loss: float, 
-                   up_deps: int, down_deps: int, epsilon: float):
-        """记录一个episode的数据"""
+                   up_deps: int, down_deps: int, epsilon: float,
+                   up_wait: float = 0.0, down_wait: float = 0.0):
+        """记录一个episode的数据（增强版）"""
         self.episode_rewards.append(reward)
         self.episode_losses.append(loss)
         self.up_departures.append(up_deps)
@@ -54,9 +64,23 @@ class TrainingMonitor:
         if diff > 1:
             self.balance_violations.append(episode)
         
+        # 新增：记录等待时间
+        self.up_waiting_times.append(up_wait)
+        self.down_waiting_times.append(down_wait)
+        
+        # 新增：记录比率
+        ratio = down_wait / up_wait if up_wait > 0 else 0
+        self.waiting_time_ratios.append(ratio)
+        
+        # 新增：更新最佳
+        avg_wait = (up_wait + down_wait) / 2
+        if avg_wait < self.best_avg_waiting and avg_wait > 0:
+            self.best_avg_waiting = avg_wait
+            self.best_episode = episode
+        
     def plot_training_curves(self, save_path: str = None):
-        """绘制训练曲线"""
-        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        """绘制训练曲线（增强版）"""
+        fig, axes = plt.subplots(3, 3, figsize=(20, 15))
         
         # 奖励曲线
         axes[0, 0].plot(self.episode_rewards)
@@ -111,6 +135,44 @@ class TrainingMonitor:
         axes[1, 2].legend()
         axes[1, 2].grid(True)
         
+        # 新增：上下行等待时间对比
+        if len(self.up_waiting_times) > 0:
+            axes[2, 0].plot(self.up_waiting_times, label='Up', alpha=0.7, color='blue')
+            axes[2, 0].plot(self.down_waiting_times, label='Down', alpha=0.7, color='orange')
+            axes[2, 0].axhline(y=6.2, color='green', linestyle='--', label='Theoretical Optimal')
+            if self.best_episode > 0:
+                axes[2, 0].axvline(x=self.best_episode, color='red', linestyle='--', 
+                                  label=f'Best (Ep {self.best_episode})')
+            axes[2, 0].set_title('Waiting Time Comparison')
+            axes[2, 0].set_xlabel('Episode')
+            axes[2, 0].set_ylabel('Waiting Time (min)')
+            axes[2, 0].legend()
+            axes[2, 0].grid(True)
+        
+        # 新增：等待时间比率
+        if len(self.waiting_time_ratios) > 0:
+            axes[2, 1].plot(self.waiting_time_ratios, color='purple')
+            axes[2, 1].axhline(y=1.0, color='green', linestyle='--', label='Perfect Balance')
+            axes[2, 1].set_title('Down/Up Waiting Time Ratio')
+            axes[2, 1].set_xlabel('Episode')
+            axes[2, 1].set_ylabel('Ratio')
+            axes[2, 1].legend()
+            axes[2, 1].grid(True)
+        
+        # 新增：滚动平均等待时间
+        if len(self.up_waiting_times) >= 50:
+            window = 50
+            up_ma = np.convolve(self.up_waiting_times, np.ones(window)/window, mode='valid')
+            down_ma = np.convolve(self.down_waiting_times, np.ones(window)/window, mode='valid')
+            axes[2, 2].plot(up_ma, label='Up (MA50)', alpha=0.7, color='blue')
+            axes[2, 2].plot(down_ma, label='Down (MA50)', alpha=0.7, color='orange')
+            axes[2, 2].axhline(y=6.2, color='green', linestyle='--', label='Optimal')
+            axes[2, 2].set_title(f'Waiting Time (Moving Average {window})')
+            axes[2, 2].set_xlabel('Episode')
+            axes[2, 2].set_ylabel('Waiting Time (min)')
+            axes[2, 2].legend()
+            axes[2, 2].grid(True)
+        
         plt.tight_layout()
         
         if save_path:
@@ -122,7 +184,7 @@ class TrainingMonitor:
         plt.close()
         
     def save_metrics(self, filepath: str = None):
-        """保存训练指标"""
+        """保存训练指标（增强版）"""
         if filepath is None:
             filepath = self.save_dir / 'training_metrics.json'
         
@@ -132,8 +194,16 @@ class TrainingMonitor:
             'up_departures': self.up_departures,
             'down_departures': self.down_departures,
             'epsilon_history': self.epsilon_history,
+            'up_waiting_times': self.up_waiting_times,  # 新增
+            'down_waiting_times': self.down_waiting_times,  # 新增
+            'waiting_time_ratios': self.waiting_time_ratios,  # 新增
+            'best_episode': self.best_episode,  # 新增
+            'best_avg_waiting': self.best_avg_waiting,  # 新增
             'final_avg_reward': np.mean(self.episode_rewards[-50:]) if len(self.episode_rewards) >= 50 else np.mean(self.episode_rewards),
-            'final_departure_balance': abs(np.mean(self.up_departures[-50:]) - np.mean(self.down_departures[-50:])) if len(self.up_departures) >= 50 else 0
+            'final_departure_balance': abs(np.mean(self.up_departures[-50:]) - np.mean(self.down_departures[-50:])) if len(self.up_departures) >= 50 else 0,
+            'final_up_waiting': np.mean(self.up_waiting_times[-50:]) if len(self.up_waiting_times) >= 50 else 0,  # 新增
+            'final_down_waiting': np.mean(self.down_waiting_times[-50:]) if len(self.down_waiting_times) >= 50 else 0,  # 新增
+            'final_waiting_ratio': np.mean(self.waiting_time_ratios[-50:]) if len(self.waiting_time_ratios) >= 50 else 0  # 新增
         }
         
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -143,8 +213,8 @@ class TrainingMonitor:
 
 
 def train_drl_tsbc(route_id: str = '208',
-                   episodes: int = 500,
-                   save_interval: int = 50,
+                   episodes: int = 50,  # 论文规范：E=50
+                   save_interval: int = 10,  # 每10轮保存一次
                    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
     """
     训练DRL-TSBC模型
@@ -259,7 +329,7 @@ def train_drl_tsbc(route_id: str = '208',
             # 执行动作
             next_state, _, done = env.step(action)
             
-            # 计算奖励
+            # 计算奖励（v2.7：纯论文公式 + Tmax=20）
             reward = agent.calculate_reward(action, state)
             
             # 存储经验
@@ -314,14 +384,21 @@ def train_drl_tsbc(route_id: str = '208',
         up_deps = len(up_departure_times_balanced)
         down_deps = len(down_departure_times_balanced)
         
-        # 记录数据
-        monitor.log_episode(episode, episode_reward, avg_loss, up_deps, down_deps, agent.epsilon)
+        # 获取环境统计信息（用于记录等待时间）
+        stats = env.get_statistics()
+        up_stats = stats['up_statistics']
+        down_stats = stats['down_statistics']
+        
+        # 计算平均等待时间（分钟）
+        up_avg_wait = up_stats['total_waiting_time'] / up_stats['total_passengers_served'] if up_stats['total_passengers_served'] > 0 else 0
+        down_avg_wait = down_stats['total_waiting_time'] / down_stats['total_passengers_served'] if down_stats['total_passengers_served'] > 0 else 0
+        
+        # 记录数据（包含等待时间）
+        monitor.log_episode(episode, episode_reward, avg_loss, up_deps, down_deps, agent.epsilon,
+                           up_avg_wait, down_avg_wait)
         
         # 定期输出
         if (episode + 1) % 50 == 0:
-            # 获取环境统计信息
-            stats = env.get_statistics()
-            
             print(f"\nEpisode {episode + 1}/{episodes}")
             avg_window = min(50, len(monitor.episode_rewards))
             print(f"  平均奖励(最近{avg_window}轮): {np.mean(monitor.episode_rewards[-avg_window:]):.2f}")
@@ -331,15 +408,17 @@ def train_drl_tsbc(route_id: str = '208',
             print(f"  总发车: {up_deps + down_deps}")
             
             # 显示乘客服务质量指标
-            up_stats = stats['up_statistics']
-            down_stats = stats['down_statistics']
-            
-            # 计算平均等待时间（分钟）
-            up_avg_wait = up_stats['total_waiting_time'] / up_stats['total_passengers_served'] if up_stats['total_passengers_served'] > 0 else 0
-            down_avg_wait = down_stats['total_waiting_time'] / down_stats['total_passengers_served'] if down_stats['total_passengers_served'] > 0 else 0
-            
             print(f"  上行: 平均等待{up_avg_wait:.1f}分钟, 滞留乘客{up_stats['stranded_passengers']}人")
             print(f"  下行: 平均等待{down_avg_wait:.1f}分钟, 滞留乘客{down_stats['stranded_passengers']}人")
+            
+            # 新增：显示等待时间比率
+            if up_avg_wait > 0:
+                wait_ratio = down_avg_wait / up_avg_wait
+                print(f"  等待时间比率(下/上): {wait_ratio:.2f}")
+            
+            # 新增：显示最佳episode信息
+            if monitor.best_episode > 0:
+                print(f"  当前最佳: Episode {monitor.best_episode}, 平均等待{monitor.best_avg_waiting:.2f}分钟")
             
             print(f"  平均差异(最近{avg_window}轮): {np.mean(monitor.departure_differences[-avg_window:]):.2f}")
             print(f"  Epsilon: {agent.epsilon:.3f}")
@@ -349,6 +428,17 @@ def train_drl_tsbc(route_id: str = '208',
             model_path = monitor.save_dir / f'model_episode_{episode+1}.pth'
             agent.save_model(str(model_path))
             print(f"  模型已保存: {model_path}")
+        
+        # 保存最佳模型
+        if monitor.best_episode == episode + 1:
+            best_model_path = monitor.save_dir / 'model_best.pth'
+            agent.save_model(str(best_model_path))
+            print(f"  ✓ 新的最佳模型已保存: {best_model_path}")
+        
+        # Early stopping: 如果100轮没有改善，停止训练
+        if episode - monitor.best_episode >= 100 and monitor.best_episode > 0:
+            print(f"\n早停: {episode - monitor.best_episode}轮没有改善，最佳在Episode {monitor.best_episode}")
+            break
     
     print("\n" + "=" * 80)
     print("训练完成！")
@@ -415,7 +505,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='训练DRL-TSBC模型')
     parser.add_argument('--route', type=str, default='208', help='路线编号')
-    parser.add_argument('--episodes', type=int, default=500, help='训练轮数 (默认500)')
+    parser.add_argument('--episodes', type=int, default=50, help='训练轮数 (论文规范: E=50)')
     parser.add_argument('--save-interval', type=int, default=50, help='模型保存间隔')
     parser.add_argument('--device', type=str, default='auto', help='训练设备 (auto/cuda/cpu)')
     

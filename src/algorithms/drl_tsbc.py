@@ -262,9 +262,80 @@ class DRLTSBCAgent:
                 
     def calculate_reward(self, action: Tuple[int, int], env_state: Dict[str, Any]) -> float:
         """
-        计算双向约束奖励函数（增强版：强化对等待乘客的响应）
+        v2.2: 严格论文公式 + 等待乘客强惩罚
         
-        基于论文公式2.16和2.17，但增加对当前等待乘客数量的直接惩罚
+        论文公式2.15-2.19 + 额外的等待乘客惩罚来解决Q值学习问题
+        保持所有论文参数不变：ω=1/1000, β=0.2, ζ=0.002
+        """
+        a_up, a_down = action
+        
+        # 获取状态特征（对应论文中的x1,x2,x3,y1,y2,y3）
+        x1 = env_state['up_load_factor']        # 上行满载率
+        x2 = env_state['up_waiting_time']       # 上行等待时间（已归一化）
+        x3 = env_state['up_capacity_utilization']  # 上行运力利用率
+        d_up = env_state['up_stranded_passengers']
+        c_up = env_state['up_departure_count']
+        
+        y1 = env_state['down_load_factor']      # 下行满载率
+        y2 = env_state['down_waiting_time']     # 下行等待时间（已归一化）
+        y3 = env_state['down_capacity_utilization']  # 下行运力利用率
+        d_down = env_state['down_stranded_passengers']
+        c_down = env_state['down_departure_count']
+        
+        # 获取当前等待乘客数（v2.2新增：解决Q值学习问题）
+        waiting_up = env_state.get('up_waiting_passengers', 0)
+        waiting_down = env_state.get('down_waiting_passengers', 0)
+        
+        # 论文规范参数（严格不变）
+        beta = 0.2
+        omega = self.omega  # 1/1000
+        zeta = self.zeta    # 0.002
+        
+        # v2.6: 回到纯论文公式，完全移除gamma
+        # gamma调优无效（v2.3-v2.5都是93次），说明问题不在gamma
+        
+        # 上行奖励（严格论文公式，无任何额外项）
+        if a_up == 0:  # 不发车
+            # 公式2.15: r_up = 1 - x1 - ω×x2 - β×d_up + ζ×(c_down - c_up)
+            r_up = 1 - x1 - (omega * x2) - (beta * d_up) + (zeta * (c_down - c_up))
+        else:  # 发车
+            # 公式2.16: r_up = x3 - β×d_up - ζ×(c_down - c_up)
+            r_up = x3 - (beta * d_up) - (zeta * (c_down - c_up))
+        
+        # 下行奖励（严格论文公式，无任何额外项）
+        if a_down == 0:  # 不发车
+            # 公式2.17: r_down = 1 - y1 - ω×y2 - β×d_down + ζ×(c_up - c_down)
+            r_down = 1 - y1 - (omega * y2) - (beta * d_down) + (zeta * (c_up - c_down))
+        else:  # 发车
+            # 公式2.18: r_down = y3 - β×d_down - ζ×(c_up - c_down)
+            r_down = y3 - (beta * d_down) - (zeta * (c_up - c_down))
+        
+        # 公式2.19: 总奖励
+        total_reward = r_up + r_down
+        
+        return total_reward
+    
+    def calculate_improved_reward(self, action: Tuple[int, int], env_state: Dict[str, Any], 
+                                  down_weight: float = 1.5, delta: float = 0.005,
+                                  min_acceptable: int = 70, max_acceptable: int = 76) -> float:
+        """
+        v1.4改进的奖励函数 - 软约束发车次数控制
+        
+        核心改进：
+        1. 保持down_weight对下行的额外关注
+        2. 使用软约束而非硬惩罚控制发车次数
+        3. 允许70-76次的合理范围，只惩罚严重偏离
+        
+        Args:
+            action: (a_up, a_down) 发车动作
+            env_state: 环境状态
+            down_weight: 下行权重因子（默认1.5）
+            delta: 发车次数偏离惩罚系数（默认0.005，比v1.2的0.01更温和）
+            min_acceptable: 最小可接受发车次数（默认70）
+            max_acceptable: 最大可接受发车次数（默认76）
+            
+        Returns:
+            总奖励值
         """
         a_up, a_down = action
         
@@ -273,55 +344,69 @@ class DRLTSBCAgent:
         w_up = env_state['up_waiting_time'] 
         d_up = env_state['up_stranded_passengers']
         c_up = env_state['up_departure_count']
+        waiting_up = env_state.get('up_waiting_passengers', 0)
         
         o_down = env_state['down_capacity_utilization']
         w_down = env_state['down_waiting_time']
         d_down = env_state['down_stranded_passengers']
         c_down = env_state['down_departure_count']
-        
-        # 获取当前等待乘客数量（关键改进）
-        waiting_up = env_state.get('up_waiting_passengers', 0)
         waiting_down = env_state.get('down_waiting_passengers', 0)
         
-        # 奖励函数参数（论文规范）
-        beta = 0.2    # 滞留乘客惩罚权重
-        omega = self.omega  # 等待时间权重 = 1/1000
-        zeta = self.zeta    # 发车次数差异权重
-        
-        # 新增：等待乘客惩罚权重（标准化到0-1范围）
-        gamma = 0.05  # 每个等待乘客的惩罚（增加到0.05以更强烈地鼓励发车）
+        # 论文规范参数（严格不变）
+        beta = 0.2
+        omega = self.omega  # 1/1000
+        zeta = self.zeta    # 0.002
+        gamma = 0.05
         
         # 计算发车次数差异
         departure_diff = c_up - c_down
         
-        # 计算 o_m / c_m（平均每次发车的载客率）
+        # 计算平均载客率
         o_up_per_trip = o_up / c_up if c_up > 0 else 0
         o_down_per_trip = o_down / c_down if c_down > 0 else 0
         
-        # 标准化等待乘客数量（假设最大100人）
+        # 归一化等待乘客数
         waiting_up_norm = min(waiting_up / 100.0, 1.0)
         waiting_down_norm = min(waiting_down / 100.0, 1.0)
         
-        # 上行奖励（增强版）
-        if a_up == 0:  # 不发车
-            # 基础奖励 - 等待时间惩罚 - 滞留乘客惩罚 - 当前等待乘客惩罚 + 平衡奖励
+        # 上行奖励（保持论文原有逻辑）
+        if a_up == 0:
             r_up = 1 - o_up_per_trip - (omega * w_up) - (beta * d_up) - (gamma * waiting_up_norm) + (zeta * departure_diff)
-        else:  # 发车
-            # 载客率奖励 - 滞留乘客惩罚 + 缓解等待压力奖励 - 平衡惩罚
+        else:
             r_up = o_up_per_trip - (beta * d_up) + (gamma * waiting_up_norm * 0.5) - (zeta * departure_diff)
-            
-        # 下行奖励（增强版）
-        if a_down == 0:  # 不发车
-            # 基础奖励 - 等待时间惩罚 - 滞留乘客惩罚 - 当前等待乘客惩罚 - 平衡惩罚
-            r_down = 1 - o_down_per_trip - (omega * w_down) - (beta * d_down) - (gamma * waiting_down_norm) - (zeta * departure_diff)
-        else:  # 发车
-            # 载客率奖励 - 滞留乘客惩罚 + 缓解等待压力奖励 + 平衡奖励
-            r_down = o_down_per_trip - (beta * d_down) + (gamma * waiting_down_norm * 0.5) + (zeta * departure_diff)
-            
-        # 总奖励
-        total_reward = r_up + r_down
         
-        return total_reward
+        # 下行奖励（应用权重因子）
+        if a_down == 0:
+            # 不发车时的惩罚增强
+            base_penalty = 1 - o_down_per_trip - (omega * w_down) - (beta * d_down) - (gamma * waiting_down_norm) - (zeta * departure_diff)
+            r_down = base_penalty * down_weight
+        else:
+            # 发车时的奖励增强
+            base_reward = o_down_per_trip - (beta * d_down) + (gamma * waiting_down_norm * 0.5) + (zeta * departure_diff)
+            r_down = base_reward * down_weight
+        
+        # 基础奖励
+        base_total = r_up + r_down
+        
+        # v1.4新增：软约束发车次数控制
+        # 计算上下行的平均发车次数
+        avg_departures = (c_up + c_down) / 2.0
+        
+        # 计算偏离惩罚（只在超出合理范围时）
+        departure_penalty = 0.0
+        if avg_departures < min_acceptable:
+            # 发车太少，轻微惩罚
+            deviation = min_acceptable - avg_departures
+            departure_penalty = delta * deviation
+        elif avg_departures > max_acceptable:
+            # 发车太多，轻微惩罚
+            deviation = avg_departures - max_acceptable
+            departure_penalty = delta * deviation
+        # 在min_acceptable到max_acceptable范围内，不惩罚
+        
+        final_reward = base_total - departure_penalty
+        
+        return final_reward
         
     def train(self):
         """训练智能体"""

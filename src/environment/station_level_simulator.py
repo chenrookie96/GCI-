@@ -473,11 +473,11 @@ class StationLevelBusEnvironment:
         return min(state.total_passengers_served / (state.total_departures * self.bus_capacity), 1.0)
     
     def _calculate_normalized_waiting_time(self, state: DirectionState) -> float:
-        """计算标准化等待时间"""
+        """计算标准化等待时间（论文规范：用µ=5000归一化总等待时间）"""
         if state.total_passengers_served == 0:
             return 0.0
-        avg_waiting = state.total_waiting_time / state.total_passengers_served
-        return min(avg_waiting / 30.0, 1.0)  # 标准化到[0,1]，30分钟为上限
+        # 论文公式2.5: x2_m = W_m / µ，其中W_m是总等待时间，µ=5000
+        return min(state.total_waiting_time / 5000.0, 1.0)
     
     def _get_current_state(self) -> Dict[str, Any]:
         """获取当前状态（10维状态空间，保持兼容）"""
@@ -488,13 +488,15 @@ class StationLevelBusEnvironment:
         up_load_factor = self._calculate_load_factor(self.up_state)
         up_waiting_time = self._calculate_normalized_waiting_time(self.up_state)
         up_capacity_util = self._calculate_capacity_utilization(self.up_state)
-        up_departure_count_norm = min(self.up_state.total_departures / 100.0, 1.0)
+        # 论文公式2.10: x4_m = c_m / δ，其中δ=200
+        up_departure_count_norm = min(self.up_state.total_departures / 200.0, 1.0)
         
         # 计算下行特征
         down_load_factor = self._calculate_load_factor(self.down_state)
         down_waiting_time = self._calculate_normalized_waiting_time(self.down_state)
         down_capacity_util = self._calculate_capacity_utilization(self.down_state)
-        down_departure_count_norm = min(self.down_state.total_departures / 100.0, 1.0)
+        # 论文公式2.14: y4_m = c_m / δ，其中δ=200
+        down_departure_count_norm = min(self.down_state.total_departures / 200.0, 1.0)
         
         return {
             # 时间特征
