@@ -1,185 +1,156 @@
-# DRL-TSBC: 基于深度强化学习的双向动态公交时刻表排班算法
+# DRL-TSBC 算法复现项目
 
-本项目实现了基于深度强化学习的双向动态公交时刻表排班算法（DRL-TSBC），该算法能够在保证上下行发车次数相等的约束下，动态优化公交时刻表以减少乘客等待时间并提高运营效率。
+基于深度强化学习的双向动态公交时刻表排班算法（DRL-TSBC）复现实现。
 
-## 算法特点
+## 项目简介
 
-### DRL-TSBC 核心特性
-- **双向约束**: 确保上行和下行方向发车次数相等
-- **动态决策**: 每分钟实时决策是否在两个方向发车
-- **深度强化学习**: 使用DQN网络处理高维状态空间
-- **实时适应**: 能够根据客流变化动态调整发车策略
+本项目复现了谢嘉昊论文中提出的DRL-TSBC算法，该算法使用深度Q网络（DQN）解决公交时刻表排班问题，通过强化学习动态决策发车时间，并保证上下行方向发车次数平衡。
 
-### 技术实现
-- **状态空间**: 10维特征（时间、双向运力利用率、等待时间、滞留乘客等）
-- **动作空间**: 4种组合 - (不发车,不发车), (不发车,发车), (发车,不发车), (发车,发车)
-- **奖励函数**: 平衡运营成本、服务质量和双向约束
-- **约束处理**: 最小/最大发车间隔约束
+## 环境要求
+
+- Python 3.8+
+- CUDA 11.8 (用于GPU加速)
+- GPU: NVIDIA RTX 4060 或更高
+
+## 安装步骤
+
+1. 克隆项目
+```bash
+git clone <repository-url>
+cd drl-tsbc
+```
+
+2. 创建虚拟环境（推荐）
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# 或
+venv\Scripts\activate  # Windows
+```
+
+3. 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+4. 验证CUDA可用性
+```python
+import torch
+print(torch.cuda.is_available())  # 应该输出 True
+print(torch.cuda.get_device_name(0))  # 显示GPU型号
+```
 
 ## 项目结构
 
 ```
 drl-tsbc/
-├── src/
-│   ├── algorithms/
-│   │   └── drl_tsbc.py              # DRL-TSBC算法实现
-│   └── environment/
-│       └── bidirectional_bus_simulator.py  # 双向公交仿真环境
-├── experiments/
-│   └── train_drl_tsbc.py            # 训练脚本
-├── results/                         # 训练结果和模型保存
-├── requirements.txt                 # 依赖包
-└── README.md
+├── data/                   # 数据加载模块
+├── environment/            # 公交仿真环境
+├── models/                 # DQN网络和训练
+├── inference/              # 推理和评估
+├── visualization/          # 可视化
+├── utils/                  # 工具和配置
+├── experiments/            # 实验脚本
+├── tests/                  # 测试
+├── results/                # 实验结果
+│   ├── models/            # 保存的模型
+│   ├── logs/              # 训练日志
+│   ├── figures/           # 生成的图表
+│   └── tables/            # 生成的表格
+├── configs/                # 配置文件
+└── test_data/              # 测试数据集
 ```
 
 ## 快速开始
 
-### 1. 环境配置
+### 方式1: 使用快速开始脚本（推荐）
+
+最简单的方式，自动训练和评估208线路：
 
 ```bash
-# 克隆项目
-git clone <repository-url>
-cd drl-tsbc
-
-# 安装依赖
-pip install -r requirements.txt
+python quick_start.py
 ```
 
-### 2. 运行训练
+### 方式2: 使用主程序
+
+训练单个模型：
+```bash
+# 训练208线路上行
+python main.py train --route 208 --direction 0 --episodes 50
+
+# 训练211线路下行
+python main.py train --route 211 --direction 1 --episodes 50
+```
+
+评估模型：
+```bash
+python main.py evaluate --model results/models/route_208_dir_0.pth --route 208 --direction 0
+```
+
+### 方式3: 批量训练所有线路
 
 ```bash
-# 训练DRL-TSBC算法
-python experiments/train_drl_tsbc.py
+python experiments/train_all.py --episodes 50
 ```
 
-### 3. 查看结果
+### 方式4: 使用配置文件
 
-训练完成后，结果将保存在 `results/` 目录下：
-- `drl_tsbc_model.pth`: 训练好的模型
-- `drl_tsbc_training_history.json`: 训练历史数据
-- `drl_tsbc_training_curves.png`: 训练曲线图
-- `drl_tsbc_evaluation.json`: 模型评估结果
-
-## 算法详解
-
-### 状态特征设计
-
-DRL-TSBC使用10维状态特征：
-
-1. **时间特征** (2维)
-   - 标准化小时: `time_hour / 24.0`
-   - 标准化分钟: `time_minute / 60.0`
-
-2. **上行方向特征** (3维)
-   - 运力利用率: `up_capacity_utilization`
-   - 标准化等待时间: `up_waiting_time`
-   - 滞留乘客数: `up_stranded_passengers`
-
-3. **下行方向特征** (3维)
-   - 运力利用率: `down_capacity_utilization`
-   - 标准化等待时间: `down_waiting_time`
-   - 滞留乘客数: `down_stranded_passengers`
-
-4. **双向约束特征** (2维)
-   - 发车次数差: `departure_count_diff`
-   - 总在途车辆数: `total_buses_in_service`
-
-### 奖励函数设计
-
-基于论文公式，奖励函数包含：
-
-**上行奖励**:
-```
-r_up = {
-    (1 - o_up) - (ω × w_up) - (β × d_up) - ζ(c_up - c_down),  if a_up = 0
-    o_up - (β × d_up) + ζ(c_up - c_down),                     if a_up = 1
-}
+```bash
+# 使用预定义的配置文件
+python main.py train --config configs/route_208_dir_0.json
 ```
 
-**下行奖励**:
-```
-r_down = {
-    (1 - o_down) - (ω × w_down) - (β × d_down) + ζ(c_up - c_down),  if a_down = 0
-    o_down - (β × d_down) - ζ(c_up - c_down),                       if a_down = 1
-}
+### 生成对比表格
+
+```bash
+python experiments/compare_methods.py
 ```
 
-其中：
-- `o`: 运力利用率
-- `w`: 等待时间
-- `d`: 滞留乘客数
-- `c`: 发车次数
-- `ω, β, ζ`: 权重参数
+### 测试模块
 
-### 约束处理
+```bash
+python tests/test_modules.py
+```
 
-算法实现了发车间隔约束：
-- **最小间隔约束**: 如果距离上次发车时间 < `T_min`，强制不发车
-- **最大间隔约束**: 如果距离上次发车时间 ≥ `T_max`，强制发车
-- **双向独立约束**: 上行和下行方向独立检查约束
+## 数据集
+
+项目使用的数据集位于 `test_data/` 目录：
+- 208线路：上行26站，下行24站
+- 211线路：上行17站，下行11站
+
+数据包括：
+- 乘客数据：到达时间、上下车站点
+- 交通数据：站间行驶时间
+
+## 主要参数
+
+### DQN网络参数
+- 学习率: 0.001
+- 隐藏层数: 12
+- 每层神经元数: 500
+- 批次大小: 64
+- 折扣因子γ: 0.4
+- 经验池大小: 3000
+
+### 奖励函数参数
+- μ (等待时间归一化): 5000
+- δ (发车次数归一化): 200
+- β (滞留乘客惩罚): 0.2
+- ζ (发车平衡权重): 0.002
+- ω (等待时间惩罚): 1/1000 (208线), 1/900 (211线)
 
 ## 实验结果
 
-### 训练性能指标
+训练完成后，可以在 `results/` 目录查看：
+- 训练收敛曲线
+- 性能对比表格
+- 时刻表可视化
+- 参数敏感性分析
 
-- **收敛性**: 算法在约1000轮后开始收敛
-- **双向平衡**: 上下行发车次数差异逐渐减小
-- **服务质量**: 乘客等待时间和滞留乘客数量显著降低
+## 参考文献
 
-### 关键性能指标
-
-1. **发车次数相等率**: 训练后期达到90%以上
-2. **运力利用率**: 上下行方向均保持在70-80%
-3. **滞留乘客**: 相比随机策略减少60%以上
-4. **平均等待时间**: 相比固定时刻表减少30%以上
-
-## 参数配置
-
-### 网络参数
-- 状态维度: 10
-- 隐藏层: [128, 256, 128]
-- 学习率: 0.001
-- 折扣因子: 0.95
-
-### 训练参数
-- 经验回放缓冲区: 10000
-- 批次大小: 32
-- 目标网络更新频率: 1000步
-- ε-贪婪策略: 1.0 → 0.01 (衰减率0.995)
-
-### 环境参数
-- 服务时间: 6:00-22:00
-- 车辆容量: 50人
-- 平均行程时间: 30分钟
-- 最小发车间隔: 2分钟
-- 最大发车间隔: 15分钟
-
-## 扩展功能
-
-### 1. 多线路支持
-可以扩展到多条公交线路的联合优化
-
-### 2. 动态客流预测
-集成客流预测模块，提高决策准确性
-
-### 3. 车辆调度集成
-与DRL-BSA算法结合，实现完整的公交排班调度系统
-
-### 4. 实时部署
-支持与实际公交调度系统对接
-
-## 引用
-
-如果您使用了本项目的代码，请引用原始论文：
-
-```
-谢嘉昊, 王玺钧. 基于交通大数据的公交排班和调度机制研究. 2024.
-```
+谢嘉昊, 王玺钧. 基于交通大数据的公交排班和调度机制研究.
 
 ## 许可证
 
-本项目仅供学术研究使用。
-
-## 联系方式
-
-如有问题或建议，请提交Issue或联系项目维护者。
+MIT License
